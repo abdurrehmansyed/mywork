@@ -1,0 +1,332 @@
+Playbook that applies to all systems being provisioned, sets up basic configurations
+________________________________________
+•	hosts: provisioning
+remote_user: ansible
+become: yes
+become_method: sudo
+connection: ssh
+gather_facts: yes
+tasks:
+•	name: Set the hostname
+hostname:
+name: "{{ inventory_hostname }}"
+•	replace:
+path: /etc/hosts
+regexp: '{{ ansible_hostname }}$'
+replace: " {{ inventory_hostname }}"
+owner: root
+group: root
+mode: 0644
+•	name: Update all packages
+yum:
+name: '*'
+state: latest
+•	import_role:
+name: time
+•	import_role:
+name: snmpd
+•	import_role:
+name: security
+•	import_role:
+name: rsyslog
+•	import_role:
+name: yum
+•	import_role:
+name: zabbix_agent
+OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOR
+This playbook needs to be run as part of a Workflow template, or on its own as
+the inventory (host) it runs agains is different than the rest.
+________________________________________
+•	hosts: all
+gather_facts: no
+tasks:
+•	name: Add tower host to "Provisioning" Inventory
+awx.awx.host:
+name: '{{ guest_name }}'
+description: ""
+inventory: "Provisioning"
+state: present
+enabled: true
+#tower_config_file: "/etc/tower/tower_cli.cfg"
+tower_verify_ssl: false
+Sets up a new VM from a template
+This job is part of the "Complete New Server Provisioning" workflow in Tower that stands up a new server.
+If modifying this job take into consideration the job that will run before and after it in the workflow.
+________________________________________
+•	name: Create new VM and add proper VMware tags
+hosts: all
+gather_facts: false
+connection: local
+vars:
+dig_result: "{{ lookup('dig', '{{ guest_name }}')}}"
+current_date: "{{ lookup('pipe','date +%m-%d-%Y') }}"
+Make sure A record exists, quit if not.
+pre_tasks:
+•	name: Check for A record for {{ guest_name }}
+ansible.builtin.assert:
+that:
+•	dig_result != "NXDOMAIN"
+msg: "A record doesn't exist, please create one and try again."
+tasks:
+•	ansible.builtin.import_role:
+name: vm_from_template
+•	block:
+•	name: Add tags to a virtual machine
+community.vmware.vmware_tag_manager:
+hostname: '{{ vcenter_name }}'
+username: '{{ vcenter_username }}'
+password: '{{ vcenter_pass }}'
+validate_certs: false
+tag_names:
+•	'{{ p_or_p_tag_name }}'
+•	'{{ patch_group_tag_name }}'
+object_name: '{{ guest_name }}'
+object_type: VirtualMachine
+state: add
+•	name: Add proper storage policy
+community.vmware.vmware_guest_storage_policy:
+hostname: '{{ vcenter_name }}'
+username: '{{ vcenter_username }}'
+password: '{{ vcenter_pass }}'
+validate_certs: false
+name: '{{ guest_name }}'
+vm_home: '{{ storage_policy }}'
+disk:
+•	unit_number: 0
+controller_number: 0
+policy: '{{ storage_policy }}'
+delegate_to: localhost
+rescue:
+•	name: Run rescue tasks
+ansible.builtin.debug:
+msg: 'The task "{{ ansible_failed_task.name }}" has failed, please review and resolve any dependencies once the entire job completes.'
+•	name: Wait up to 3 mins for VM to connect
+ansible.builtin.wait_for_connection:
+delay: 15
+timeout: 600
+...
+Playbook that applies to all systems being provisioned, sets up basic configurations
+This job is part of the "Complete New Server Provisioning" workflow in Tower that stands up a new server.
+If modifying this job take into consideration the job that will run before and after it in the workflow.
+________________________________________
+•	name: Provision new servers
+hosts: all
+become: yes
+become_method: sudo
+gather_facts: no
+pre_tasks:
+•	name: Wait for system to become reachable
+wait_for_connection:
+tasks:
+•	name: Gathering facts
+setup:
+•	name: Set the hostname
+hostname:
+name: "{{ inventory_hostname }}"
+•	name: Edit /etc/hosts file
+replace:
+path: /etc/hosts
+regexp: '{{ ansible_hostname }}$'
+replace: " {{ inventory_hostname }}"
+owner: root
+group: root
+mode: 0644
+•	import_role:
+name: dns
+•	import_role:
+name: rhel_registration
+when: ansible_distribution == 'RedHat'
+•	import_role:
+name: time
+tags: time
+•	name: Update all packages
+yum:
+name: '*'
+state: latest
+•	import_role:
+name: yum
+tags: yum
+•	import_role:
+name: security
+tags: security
+•	import_role:
+name: rsyslog
+tags: rsyslog
+•	import_role:
+name: zabbix_agent
+tags: zabbix
+•	import_role:
+name: splunk_maintain
+tags: splunk
+•	import_role:
+name: firewall
+tags: firewall
+•	import_role:
+name: local_facts
+tags: local_facts
+•	import_tasks: vim_config.yml
+vars:
+vim_destination: ['/root/.vimrc', '/etc/skel/.vimrc']
+•	import_role:
+name: sysctl_settings
+tags: sysctl_settings
+Set the root account password to the default
+•	name: Change root password
+user:
+name: root
+update_password: always
+password: $6$rounds=656000$7uqkD4k6PhAl.X6.$Ka.CLDnWCh7RXFzSs0n7O3wawEeFI7eWN9B.4oXS.hnXU32RvoJQUv9sKIjdxB0v3/E4EiQWmzTFgOAkLqJBi0
+•	name: Delete ssh keys
+file:
+path: /etc/ssh/{{item}}
+state: absent
+with_items:
+•	ssh_host_ecdsa_key
+•	ssh_host_ecdsa_key.pub
+•	ssh_host_ed25519_key
+•	ssh_host_ed25519_key.pub
+•	ssh_host_rsa_key
+•	ssh_host_rsa_key.pub
+tags: ssh_keys
+•	name: Remove terraform public key from authorized_keys file
+lineinfile:
+path: /root/.ssh/authorized_keys
+regexp: 'terraform-template$'
+state: absent
+tags: terraform
+•	name: Force all notified handlers
+meta: flush_handlers
+•	name: Reboot
+shell: sleep 20 && /sbin/shutdown -r now
+async: 300
+poll: 0
+ignore_errors: true
+tags: reboot
+...
+This job is part of the "Complete New Server Provisioning" workflow in Tower that stands up a new server.
+If modifying this job take into consideration the job that will run before and after it in the workflow.
+________________________________________
+•	hosts: all
+tasks:
+•	name: Create server sudo group in AD
+win_domain_group:
+name: 'server_{{xxx_service}}_{{code_name}}_sudo'
+scope: domainlocal
+path: 'OU={{xxx_service}},OU=Resource Groups,OU=xxx-Groups,DC=ds,DC=xxx,DC=org'
+•	name: Create server ssh group in AD
+win_domain_group:
+name: 'server_{{xxx_service}}_{{code_name}}_ssh'
+scope: domainlocal
+path: 'OU={xxx_service}},OU=Resource Groups,OU=xxx-Groups,DC=ds,DC=xxx,DC=org'
+This playbook join a centos server to the AD. The computer account
+will be created under OU "Linux Servers". After run this command you will be able to login and sudo in the computer using
+your admin account "ssh
+[abdur@ds.xxx.org@example](mailto:abdur@ds.org@example) server".
+In order to run this playbook you need to add three variables:\
+1. _service: Service that use this server.
+This value must match the service OU name that is showed in AD under OU: xxx groups\resourece
+#            ex: "dws": for datawarehouse service.
+2. ad_name: this is the computername in AD. This name must not use "." and must be unique in the whole directory.
+example: db1.dc.xxx.org and db1.lax.xxx.org should use db1-dc and db1-lax
+3. code_name: this a computer description to
+provide access: Usually this is the same than ad_name, but not always for example in a cluster you should use the same for
+all nodes:
+example: db1-int.lax.xxx.org db1-int.dc.xxx.org db2-int.lax.xxx.org db2-int.dc.xxx.org all of them could use same code name:
+"db-int". Code name is used to create the group that provides permission in AD. examples: server_ansible_ansible-dev_ssh
+This job is part of the "Complete New Server Provisioning" workflow in Tower that stands up a new server.
+If modifying this job take into consideration the job that will run before and after it in the workflow.
+________________________________________
+•	hosts: all
+become: yes
+gather_facts: no
+pre_tasks:
+•	name: Wait for system to become reachable
+wait_for_connection:
+tasks:
+•	name: Gathering facts
+setup:
+•	debug:
+msg: "CentOS version is {{ansible_distribution_major_version}}"
+•	name: Join computer to domain
+block:
+•	name: Install all required package to join computer to domain
+yum:
+name: sssd,realmd,oddjob,oddjob-mkhomedir,adcli,samba-common,samba-common-tools,krb5-workstation,openldap-clients
+state: present
+•	name:
+pip:
+name: pexpect
+state: present
+•	name: Reboot
+reboot:
+reboot_timeout: 120
+connect_timeout: 20
+•	name: Wait for system to become reachable
+wait_for_connection:
+•	name: Check if the system is joined to the domain
+command: /usr/sbin/realm list --name-only
+register: realm_result
+•	name: Report Realm for this server
+debug:
+msg: '{{realm_result.stdout}}'
+•	name: Join computer to the domain
+expect:
+command: /usr/sbin/realm join DS.XXX.ORG --user=ansibl-win.required@DS.XXX.ORG --computer-ou=OU='Linux Servers' --computer-name='{{ad_name}}'
+responses:
+Password for *: "{{ ldap_domain_password }}"
+when: realm_result.stdout != "ds.xxx.org"
+•	name: Add AD groups to sudoers file
+lineinfile:
+path: /etc/sudoers
+state: present
+line: '{{item.line}}'
+regexp: '{{item.regexp}}'
+validate: '/usr/sbin/visudo -cf %s'
+with_items:
+•	{ regexp: '^%server_linux_all-servers_sudo@ds.xxx.org ALL=', line: '%server_linux_all-servers_sudo@ds.xxx.org ALL=(ALL) ALL'}
+•	{ regexp: '^%server_{{xxx_service}}_{{code_name}}_sudo@ds.xxx.org ALL=', line: '%server_{{xxx_service}}_{{code_name}}_sudo@ds.xxx.org ALL=(ALL) ALL'}
+•	name: Add AD groups to sudoers in dev server.
+lineinfile:
+path: /etc/sudoers
+state: present
+regexp: '^%server_linux_dev-servers_sudo@ds.xxx.org ALL='
+line: '%server_linux_dev-servers_sudo@ds.xxx.org ALL=(ALL) ALL'
+when: "'.dev.' in inventory_hostname"
+•	name: Remove access_provider ad
+lineinfile:
+path: /etc/sssd/sssd.conf
+state: absent
+regexp: 'access_provider = ad'
+•	name: Set default domain
+lineinfile:
+path: /etc/sssd/sssd.conf
+state: present
+insertafter: '^domains = ds.xxx.org'
+line: 'default_domain_suffix = ds.xxx.org'
+regexp: 'default_domain_suffix = ds.xxx.org'
+•	name: Set groups in ssdd_config
+lineinfile:
+path: /etc/sssd/sssd.conf
+state: present
+line: '{{item.line}}'
+regexp: '{{item.regexp}}'
+with_items:
+•	{ regexp: 'access_provider = simple', line: 'access_provider = simple'}
+•	{ regexp: 'simple_allow_groups = server_{{xxx_service}}{{code_name}}ssh, server{{xxx_service}}{{code_name}}sudo, server_linux_all-servers_sudo, server_linux_all-servers_ssh', line: 'simple_allow_groups = server{{xxx_service}}{{code_name}}ssh, server{{xxx_service}}{{code_name}}_sudo, server_linux_all-servers_sudo, server_linux_all-servers_ssh'}
+when: "'.dev.' not in inventory_hostname"
+•	name: Set groups in ssdd_config for dev
+lineinfile:
+path: /etc/sssd/sssd.conf
+state: present
+line: '{{item.line}}'
+regexp: '{{item.regexp}}'
+with_items:
+•	{ regexp: 'access_provider = simple', line: 'access_provider = simple'}
+•	{ regexp: 'simple_allow_groups = server_{{xxx_service}}{{code_name}}ssh, server{{xxx_service}}{{code_name}}sudo, server_linux_all-servers_sudo, server_linux_all-servers_ssh', line: 'simple_allow_groups = server{{xxx_service}}{{code_name}}ssh, server{{xxx_service}}{{code_name}}_sudo, server_linux_all-servers_sudo, server_linux_all-servers_ssh, server_linux_dev-servers_sudo, server_linux_dev-servers_ssh'}
+when: "'.dev.' in inventory_hostname"
+•	name: Reboot
+reboot:
+reboot_timeout: 120
+connect_timeout: 20
+when: ansible_distribution_major_version != '6'
+

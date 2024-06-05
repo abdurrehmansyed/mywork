@@ -1,3 +1,6 @@
+This is part of Ansible playbook which sets the up the servers and then sets the sets up records, root passwd, connectes it to the AD, installs monitoring tools etc.
+
+
 Playbook that applies to all systems being provisioned, sets up basic configurations
 ________________________________________
 •	hosts: provisioning
